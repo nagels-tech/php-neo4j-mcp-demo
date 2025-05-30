@@ -1,0 +1,50 @@
+services:
+  # PHP development container with all dependencies for the MCP server
+  php:
+    image: php
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Pass PHP version as build argument (can be overridden)
+        PHP_VERSION: 8.3
+    volumes:
+      # Mount current directory to /opt/project for live code editing
+      - .:/opt/project
+    depends_on:
+      neo4j:
+        # Wait for Neo4j to be healthy before starting this container
+        condition: service_healthy
+    # Enable Docker's init system for proper signal handling (Ctrl+C support)
+    init: true
+    # Allocate a pseudo-TTY for colored output and proper terminal behavior
+    tty: true
+    # Keep STDIN open for interactive applications (required for MCP server)
+    stdin_open: true
+    # Keep container running indefinitely for development/debugging
+    # To run MCP server: docker compose exec php php bin/console mcp:server
+    command: tail -f /dev/null
+
+  # Neo4j graph database
+  neo4j:
+    image: neo4j:5.26.6-community
+    # Restart container unless explicitly stopped
+    restart: unless-stopped
+    ports:
+      # Neo4j Browser (web interface)
+      - "7474:7474"
+      # Bolt protocol (database connections)
+      - "7687:7687"
+    volumes:
+      # Mount data directory for scripts
+      - ./scripts:/scripts
+    environment:
+      # Set default username/password (neo4j/password)
+      - NEO4J_AUTH=neo4j/password
+    # Health check to ensure Neo4j is ready before starting dependent services
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider localhost:7474 || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

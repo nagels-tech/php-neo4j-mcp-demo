@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "neo4j-mcp": {
+      "command": "docker",
+      "args": [
+        "compose",
+        "-f",
+        "/Users/exaby73/dev/neo4j/mcp-talk-2025/php-neo4j-mcp-demo/docker-compose.yml",
+        "exec",
+        "php",
+        "bin/console",
+        "mcp:server"
+      ],
+      "env": {
+        "NEO4J_DEFAULT_CONNECTION_DSN": "neo4j://neo4j:password@localhost"
+      }
+    }
+  }
+}
