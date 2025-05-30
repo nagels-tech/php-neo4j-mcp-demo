@@ -26,8 +26,6 @@ use Symfony\Component\Console\Output\OutputInterface;
 )]
 class McpServerCommand extends Command
 {
-    private bool $shouldContinue = true;
-
     public function __construct(
         private readonly SessionInterface $session,
         private readonly LoggerInterface $logger
@@ -47,41 +45,75 @@ class McpServerCommand extends Command
 
         $this->logger->info('Starting MCP server');
 
-        // Read from stdin line by line
-        while ($this->shouldContinue && ($line = fgets(STDIN)) !== false) {
-            $line = trim($line);
+        // Read from stdin line by line with non-blocking approach
+        $stdin = STDIN;
+        $buffer = '';
 
-            if (empty($line)) {
+        while (true) {
+            // Use stream_select to check if data is available with a timeout
+            $read = [$stdin];
+            $write = null;
+            $except = null;
+            $timeout = 1; // 1 second timeout
+
+            $ready = stream_select($read, $write, $except, $timeout);
+
+            if ($ready === false) {
+                // Error occurred
+                $this->logger->error('stream_select failed');
+                break;
+            } elseif ($ready === 0) {
+                // Timeout - no data available, continue loop to allow signal processing
                 continue;
             }
 
-            $data = null;
-            try {
-                $data = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+            // Data is available to read
+            $chunk = fread($stdin, 8192);
+            if ($chunk === false || feof($stdin)) {
+                // End of input or error
+                break;
+            }
 
-                $this->logger->info('Received MCP request', ['data' => $data]);
+            $buffer .= $chunk;
 
-                $response = $this->handleMcpRequest($data);
+            // Process complete lines
+            while (($pos = strpos($buffer, "\n")) !== false) {
+                $line = substr($buffer, 0, $pos);
+                $buffer = substr($buffer, $pos + 1);
 
-                $this->logger->info('Sending MCP response', ['response' => $response]);
-                $this->writeResponse($response);
-            } catch (\JsonException $e) {
-                $this->logger->error('JSON parsing failed', ['error' => $e->getMessage(), 'line' => $line]);
-                $this->writeError(
-                    null,
-                    Constants::INVALID_REQUEST,
-                    'Invalid JSON format: ' . $e->getMessage()
-                );
-            } catch (\Exception $e) {
-                $this->logger->error('Request handling failed', [
-                    'error' => $e->getMessage(),
-                    'id' => $data['id'] ?? null
-                ]);
-                $this->writeError(
-                    $data['id'] ?? null,
-                    Constants::INTERNAL_ERROR,
-                    $e->getMessage()
-                );
+                $line = trim($line);
+                if (empty($line)) {
+                    continue;
+                }
+
+                $data = null;
+                try {
+                    $data = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+
+                    $this->logger->info('Received MCP request', ['data' => $data]);
+
+                    $response = $this->handleMcpRequest($data);
+
+                    $this->logger->info('Sending MCP response', ['response' => $response]);
+                    $this->writeResponse($response);
+                } catch (\JsonException $e) {
+                    $this->logger->error('JSON parsing failed', ['error' => $e->getMessage(), 'line' => $line]);
+                    $this->writeError(
+                        null,
+                        Constants::INVALID_REQUEST,
+                        'Invalid JSON format: ' . $e->getMessage()
+                    );
+                } catch (\Exception $e) {
+                    $this->logger->error('Request handling failed', [
+                        'error' => $e->getMessage(),
+                        'id' => $data['id'] ?? null
+                    ]);
+                    $this->writeError(
+                        $data['id'] ?? null,
+                        Constants::INTERNAL_ERROR,
+                        $e->getMessage()
+                    );
+                }
             }
         }
 
@@ -452,12 +484,12 @@ class McpServerCommand extends Command
         // Set up signal handlers for graceful shutdown
         pcntl_signal(SIGINT, function ($signal) {
             $this->logger->info('Received SIGINT (Ctrl+C), shutting down gracefully');
-            $this->shouldContinue = false;
+            exit(0);
         });
 
         pcntl_signal(SIGTERM, function ($signal) {
             $this->logger->info('Received SIGTERM, shutting down gracefully');
-            $this->shouldContinue = false;
+            exit(0);
         });
 
         // Enable signal handling
